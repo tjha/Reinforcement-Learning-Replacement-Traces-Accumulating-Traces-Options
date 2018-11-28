@@ -19,9 +19,9 @@ xooooooooooox
 xoooooxooooox
 xxxxxxxxxxxxx
 '''
-V = {(3,3):1} # V is a dictionary storing the values of each state.
+V = {(3,4):1} # V is a dictionary storing the values of each state.
 
-def plot_gridworld(maps,V):
+def plot_gridworld(maps,V,img_number):
     maps = maps.split('\n')[1:-1]
     height = len(maps)
     width = len(maps[0])
@@ -49,6 +49,4 @@ def plot_gridworld(maps,V):
         circle = plt.Circle((y,x),val/2.1,color='k')
         ax.add_artist(circle)
     ax.grid(which='major',color='black',alpha=1)
-    plt.show()
-    
-plot_gridworld(MAPS,V)
+    plt.savefig('img%s.png' % (str(img_number)))

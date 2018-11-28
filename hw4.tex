@@ -37,7 +37,7 @@ This document includes my responses to Homework 4 questions. Responses that invo
 \section*{Question 1}
 \begin{enumerate}[label=(\alph*)]
 \item
-In this specific problem, we are able to set epsilon to 0 because we begin with optimistic initial values. We covered optimistic initial values in the bandit setting, but similarly in this specific problem, these values will encourage initial exploration until values are brought down to a point where the estimated values approach the expected values for the greedy actions.
+In this specific problem, we are able to set epsilon to 0 because we begin with optimistic initial values. We covered optimistic initial values in the bandit setting, but similarly in this specific problem, these values will encourage initial exploration until values are brought down to a point where the estimated values approach the expected values for the greedy actions. The optimistic initial value we use for the values is 0, which is greater than the true values since a reward of -1 is received for every time step where the car is not at the terminal state.
 
 \item
 Below is a generated plot similar to the left part of Figure 12.10 from the textbook for the requested trace and alpha values using replacing traces.

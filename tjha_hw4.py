@@ -9,112 +9,30 @@ import gym
 from gym.envs.registration import register
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from math import floor, log
 from itertools import zip_longest
+import tiles3 as t3
+from diagram import MAPS
+from diagram import plot_gridworld
 
-######################################################################################
-# The code below is from http://incompleteideas.net/tiles/tiles3.py-remove
-# which is the Tile Coding Software by Rich Sutton
-# Below is the footnote from page 246 in the textbook directing us to this code:
-#
-# 
-#     In particular, we used the tile-coding software, available at http://incompleteideas.net/tiles/
-# tiles3.html, with iht=IHT(4096) and tiles(iht,8,[8*x/(0.5+1.2),8*xdot/(0.07+0.07)],A) to get
-# the indices of the ones in the feature vector for state (x, xdot) and action A.
-
-basehash = hash 
-
-class IHT:
-    "Structure to handle collisions"
-    def __init__(self, sizeval):
-        self.size = sizeval                        
-        self.overfullCount = 0
-        self.dictionary = {}
-
-    def __str__(self):
-        "Prepares a string for printing whenever this object is printed"
-        return "Collision table:" + \
-               " size:" + str(self.size) + \
-               " overfullCount:" + str(self.overfullCount) + \
-               " dictionary:" + str(len(self.dictionary)) + " items"
-
-    def count (self):
-        return len(self.dictionary)
-    
-    def fullp (self):
-        return len(self.dictionary) >= self.size
-    
-    def getindex (self, obj, readonly=False):
-        d = self.dictionary
-        if obj in d: return d[obj]
-        elif readonly: return None
-        size = self.size
-        count = self.count()
-        if count >= size:
-            if self.overfullCount==0: print('IHT full, starting to allow collisions')
-            self.overfullCount += 1
-            return basehash(obj) % self.size
-        else:
-            d[obj] = count
-            return count
-
-def hashcoords(coordinates, m, readonly=False):
-    if type(m)==IHT: return m.getindex(tuple(coordinates), readonly)
-    if type(m)==int: return basehash(tuple(coordinates)) % m
-    if m==None: return coordinates
-
-def tiles (ihtORsize, numtilings, floats, ints=[], readonly=False):
-    """returns num-tilings tile indices corresponding to the floats and ints"""
-    qfloats = [floor(f*numtilings) for f in floats]
-    Tiles = []
-    for tiling in range(numtilings):
-        tilingX2 = tiling*2
-        coords = [tiling]
-        b = tiling
-        for q in qfloats:
-            coords.append( (q + b) // numtilings )
-            b += tilingX2
-        coords.extend(ints)
-        Tiles.append(hashcoords(coords, ihtORsize, readonly))
-    return Tiles
-
-def tileswrap (ihtORsize, numtilings, floats, wrapwidths, ints=[], readonly=False):
-    """returns num-tilings tile indices corresponding to the floats and ints, wrapping some floats"""
-    qfloats = [floor(f*numtilings) for f in floats]
-    Tiles = []
-    for tiling in range(numtilings):
-        tilingX2 = tiling*2
-        coords = [tiling]
-        b = tiling
-        for q, width in zip_longest(qfloats, wrapwidths):
-            c = (q + b%numtilings) // numtilings
-            coords.append(c%width if width else c)
-            b += tilingX2
-        coords.extend(ints)
-        Tiles.append(hashcoords(coords, ihtORsize, readonly))
-    return Tiles
-
-# End of Tile Coding Software
-###########################################################################################
-#
 # Environment Generation
-
 register(
     id = 'MountainCar-v1',
     entry_point = 'gym.envs.classic_control:MountainCarEnv',
     max_episode_steps = 5000
 )
-ENV = gym.make('MountainCar-v1')
+
+env = gym.make('MountainCar-v1')
 ###########################################################################################
 #
 # cp code
 # all possible actions
-ACTION_REVERSE = -1
-ACTION_ZERO = 0
-ACTION_FORWARD = 1
+ACTION_REVERSE = 0
+ACTION_ZERO = 1
+ACTION_FORWARD = 2
 # order is important
 ACTIONS = [ACTION_REVERSE, ACTION_ZERO, ACTION_FORWARD]
 
@@ -145,56 +63,37 @@ def step(position, velocity, action):
         new_velocity = 0.0
     return new_position, new_velocity, reward
 
-# accumulating trace update rule
-# @trace: old trace (will be modified)
-# @activeTiles: current active tile indices
-# @lam: lambda
-# @return: new trace for convenience
+
 def accumulating_trace(trace, active_tiles, lam):
     trace *= lam * DISCOUNT
     trace[active_tiles] += 1
     return trace
 
-# replacing trace update rule
-# @trace: old trace (will be modified)
-# @activeTiles: current active tile indices
-# @lam: lambda
-# @return: new trace for convenience
 def replacing_trace(trace, activeTiles, lam):
     active = np.in1d(np.arange(len(trace)), activeTiles)
     trace[active] = 1
     trace[~active] *= lam * DISCOUNT
     return trace
 
-# wrapper class for Sarsa(lambda)
 class Sarsa:
-    # @maxSize: the maximum # of indices
-    def __init__(self, step_size, lam, trace_update=accumulating_trace, num_of_tilings=8, max_size=2048):
+
+    def __init__(self, step_size, lam, trace_update=accumulating_trace, num_of_tilings=8, max_size=4096):
         self.max_size = max_size
         self.num_of_tilings = num_of_tilings
         self.trace_update = trace_update
         self.lam = lam
 
-        # divide step size equally to each tiling
+
         self.step_size = step_size / num_of_tilings
-
-        self.hash_table = IHT(max_size)
-
-        # weight for each tile
+        self.hash_table = t3.IHT(max_size)
         self.weights = np.zeros(max_size)
-
-        # trace for each tile
         self.trace = np.zeros(max_size)
 
-        # position and velocity needs scaling to satisfy the tile software
         self.position_scale = self.num_of_tilings / (POSITION_MAX - POSITION_MIN)
         self.velocity_scale = self.num_of_tilings / (VELOCITY_MAX - VELOCITY_MIN)
 
-    # get indices of active tiles for given state and action
     def get_active_tiles(self, position, velocity, action):
-        # I think positionScale * (position - position_min) would be a good normalization.
-        # However positionScale * position_min is a constant, so it's ok to ignore it.
-        active_tiles = tiles(self.hash_table, self.num_of_tilings,
+        active_tiles = t3.tiles(self.hash_table, self.num_of_tilings,
                             [self.position_scale * position, self.velocity_scale * velocity],
                             [action])
         return active_tiles
@@ -231,7 +130,7 @@ def get_action(position, velocity, valueFunction):
     values = []
     for action in ACTIONS:
         values.append(valueFunction.value(position, velocity, action))
-    return np.argmax(values) - 1
+    return np.argmax(values)
 
 # play Mountain Car for one episode based on given method @evaluator
 # @return: total steps in this episode
@@ -256,6 +155,31 @@ def play(evaluator):
             break
     return steps
 
+def execute(evaluator):
+    observations = env.reset()
+    position = observations[0]
+    velocity = observations[1]
+    action = get_action(position, velocity, evaluator)
+    steps = 0
+    while True:
+        env.render()
+        observation, reward, done, _ = env.step(action)
+        next_position = observation[0]
+        next_velocity = observation[1]
+        next_action = get_action(next_position, next_velocity, evaluator)
+        steps += 1
+        target = reward + DISCOUNT * evaluator.value(next_position, next_velocity, next_action)
+        evaluator.learn(position, velocity, action, target)
+        position = next_position
+        velocity = next_velocity
+        action = next_action
+        if done:
+            break
+        if steps >= STEP_LIMIT:
+            print('Step Limit Exceeded!')
+            break
+    return steps
+
 # end cp code
 ###########################################################################################
 
@@ -265,15 +189,17 @@ def q1plots():
     episodes = 50
     lambdas = [0,0.9]
 
-    # Part (b) -    Generation of plot using replacing traces
+    # Part (b) - Generation of plot using replacing traces
     alphas = np.arange(0.6,2.0,0.2) / 8.0
     steps = np.zeros((len(lambdas), len(alphas), runs, episodes))
     for lambdaIdx, lam in enumerate(lambdas):
         for alphaIdx, alpha in enumerate(alphas):
             for run in tqdm(range(runs)):
+                env.reset()
                 evaluator = Sarsa(alpha, lam, replacing_trace, max_size=4096)
                 for ep in range(episodes):
-                    step = play(evaluator)
+                    #step = play(evaluator)
+                    step = execute(evaluator)
                     steps[lambdaIdx, alphaIdx, run, ep] = step
 
     # average over episodes
@@ -289,7 +215,7 @@ def q1plots():
     #plt.ylim([180, 300])
     plt.legend()
 
-    plt.savefig('replacing_traces.png')
+    plt.savefig('replacing_traces2.png')
     plt.close()
 
     print("Completed Problem 1 Part (b)")
@@ -302,7 +228,8 @@ def q1plots():
             for run in tqdm(range(runs)):
                 evaluator = Sarsa(alpha, lam, accumulating_trace, max_size=4096)
                 for ep in range(episodes):
-                    step = play(evaluator)
+                    #step = play(evaluator)
+                    step = execute(evaluator)
                     steps[lambdaIdx, alphaIdx, run, ep] = step
 
     # average over episodes
@@ -318,7 +245,7 @@ def q1plots():
     #plt.ylim([180, 300])
     plt.legend()
 
-    plt.savefig('accumulating_traces.png')
+    plt.savefig('accumulating_traces2.png')
     plt.close()
 
     print("Completed Problem 1 Part (c)")
@@ -513,7 +440,7 @@ def q2plot1():
     plt.xlabel('episode')
     plt.legend(loc='lower right')
 
-    plt.savefig('fig1.png')
+    plt.savefig('fig1_2.png')
     plt.close()
 
 def q2plot2():
@@ -540,17 +467,109 @@ def q2plot2():
     plt.xlabel('episode')
     plt.legend(loc='lower right')
 
-    plt.savefig('fig2.png')
+    plt.savefig('fig2_2.png')
     plt.close()
 
+#################################################################################################################
+#
+# Code for Q3
+
+class FourRooms:
+    """
+    Four Rooms environment from Options paper
+    Weird implementation for planning purposes
+    """
+    def __init__(self, start_h, start_w):
+        self.reset(start_h, start_w)
+
+    def reset(self, start_h, start_w):
+        self.goal_state = (start_h, start_w)
+
+    def action_taken(self, action):
+        if np.random.binomial(1, 2/3) == 1:
+            return action
+        possible_actions = [0,1,2,3]
+        possible_actions.pop(action)
+        return np.random.choice(possible_actions)
+
+    def step_reward(self, current_state, direction):
+        """
+        Args:
+            current_state: tuple corresponding to location
+            direction: up(0), right(1), down(2), left(3)
+        Returns:
+            tuple of (reward, episode terminated?)
+        """
+        new_state = current_state.copy()
+        action = self.action_taken(direction)
+
+        if action == 0 and new_state[0] != 1:
+            new_state[0] -= 1
+        elif action == 1 and new_state[1] != 11:
+            new_state[1] += 1
+        elif action == 2 and new_state[0] != 11:
+            new_state[0] += 1
+        elif action == 3 and new_state[1] != 1:
+            new_state[1] -= 1
+
+        if new_state == self.goal_state:
+            # terminal state
+            return 1, True
+        else:
+            return 0, False
+
+HALLWAYS = [(6,2), (3,6), (7,9), (10,6)]
+
+class Option:
+    def __init__(self, policy, termination_condition, initiation_set):
+        self.policy = policy
+        self.goal_state = termination_condition
+        self.possible_states = initiation_set
+    
+    def valid(self, state):
+        if state in self.possible_states:
+            return True
+        else:
+            return False
+
+    def get_action(self, state):
+        if self.valid(state):
+            return self.policy[state]
+        else:
+            return -1
+    
+    def target(self):
+        return self.goal_state
+
+class Planner:
+    "performs planning iterations"
+    def __init__(self, goal_state, options):
+        self.V = {goal_state:1}
+        self.options = options
+
+def q3fig4():
+    print("Printing primitive Options")
+    # Print a diagram for the resulting V from initial to the second iteration
+    V = {(7,9):1}
+    plot_gridworld(MAPS,V, 1)
+
+    env4 = FourRooms(7,9)
+
+
+def q3fig5():
+    print("heyoo")
+
+
 if __name__ == '__main__':
+
+    #plot_gridworld(MAPS, V)
     # Ensuring environment is reset to begin 
-    ENV.reset()
+    #env.reset()
     # -------------------------------------------------------------------------------
     # Question 1 -  Implementation of replacing traces and accumulating traces
     #               to produce plots similar to that of Figure 12.10 in the textbook
     # -------------------------------------------------------------------------------
-    #q1plots()
+    q1plots()
 
     #---------------------------------------------------------------------------------
     # Quesiton 2 -  Reproduction of Figures 13.1 and 13.2 from the textbook.
@@ -559,14 +578,17 @@ if __name__ == '__main__':
     # Figure 13.1 Reproduciton
     #q2plot1()
     # Figure 13.2 Reproduction
-    q2plot2()
+    #q2plot2()
 
     #---------------------------------------------------------------------------------
     # Quesiton 3 -  Attempts to reproduce the work behind Figures 4 and 5 in the 
     #               Options paper. Heatmap figure will be created to represent the results
     # --------------------------------------------------------------------------------
-    # 
+    # Generation of Figure 4
+    q3fig4()
+    # Generation of Figure 5
+    q3fig5()
 
 
     # Ensuring environment is closed at the end to avoid compilation issues
-    ENV.close()
+    env.close()
